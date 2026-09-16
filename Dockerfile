@@ -1,5 +1,6 @@
-﻿FROM golang:1.22-alpine AS builder
+FROM golang:1.24-alpine AS builder
 WORKDIR /app
+ENV GOTOOLCHAIN=local
 COPY . .
 RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /redislua-showcase .

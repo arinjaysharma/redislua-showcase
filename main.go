@@ -2,22 +2,28 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"embed"
 	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/arinj/redislua-showcase/internal/flashsale"
 	"github.com/arinj/redislua-showcase/internal/leaderboard"
 	"github.com/arinj/redislua-showcase/internal/lock"
 	"github.com/arinj/redislua-showcase/internal/ratelimit"
 	rdb "github.com/arinj/redislua-showcase/internal/redis"
+	"github.com/arinj/redislua-showcase/internal/telemetry"
 	"github.com/arinj/redislua-showcase/internal/wallet"
 )
 
@@ -50,12 +56,27 @@ func loadEnv() {
 
 func main() {
 	loadEnv()
+
+	// ── OpenTelemetry ───────────────────────────────────────────────────────────
+	ctx := context.Background()
+	shutdown, err := telemetry.Init(ctx, "redislua-showcase")
+	if err != nil {
+		log.Printf("[telemetry] Warning: init failed: %v (continuing without telemetry)", err)
+		shutdown = func(context.Context) error { return nil }
+	}
+
 	client := rdb.New()
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware)
+	// OTel HTTP middleware: records http.server.request.duration, http.server.active_requests
+	r.Use(func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "redislua-showcase",
+			otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
+		)
+	})
 
 	// Rate Limiter
 	r.Get("/api/ping", ratelimit.PingHandler(client))
@@ -92,6 +113,9 @@ func main() {
 	r.Get("/api/wallet/balance/{id}", walletSvc.BalanceHandler())
 	r.Get("/api/wallet/history/{id}", walletSvc.HistoryHandler())
 
+	r.Handle("/metrics", telemetry.Handler())
+
+
 	// Frontend (embedded)
 	webContent, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -103,8 +127,26 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+
+	srv := &http.Server{Addr: ":" + port, Handler: r}
+
+	// Graceful shutdown — flushes OTel buffers before exit
+	go func() {
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+		<-quit
+		log.Println("Shutting down...")
+
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = shutdown(shutCtx)
+		_ = srv.Shutdown(shutCtx)
+	}()
+
 	fmt.Printf("RedisLua Showcase running -> http://localhost:%s\n", port)
-	log.Fatal(http.ListenAndServe(":"+port, r))
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
