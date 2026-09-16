@@ -8,6 +8,10 @@ An end-to-end interactive showcase demonstrating **why**, **when**, and **how** 
 
 Designed specifically as a demonstration project to showcase clean architecture, distributed systems concepts, race condition prevention, and full-stack execution to recruiters and interviewers.
 
+## Grafana
+
+https://anorakobservabilitystack.grafana.net/public-dashboards/41cc2d20dad04754aa97277c92eaea04
+
 ---
 
 ## 🌟 Highlights
