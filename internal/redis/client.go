@@ -2,8 +2,10 @@ package redisclient
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -30,15 +32,22 @@ func New() *redis.Client {
 		}
 	}
 
-	opt.DialTimeout = 5 * time.Second
-	opt.ReadTimeout = 3 * time.Second
-	opt.WriteTimeout = 3 * time.Second
-	opt.PoolSize = 250
-	opt.MinIdleConns = 50
+	// Auto-enable TLS for Upstash or if explicitly requested
+	if opt.TLSConfig == nil && (strings.Contains(opt.Addr, "upstash.io") || strings.HasPrefix(os.Getenv("REDIS_URL"), "rediss://")) {
+		opt.TLSConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
+	}
+
+	opt.DialTimeout = 10 * time.Second
+	opt.ReadTimeout = 5 * time.Second
+	opt.WriteTimeout = 5 * time.Second
+	opt.PoolSize = 50
+	opt.MinIdleConns = 10
 
 	rdb := redis.NewClient(opt)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
