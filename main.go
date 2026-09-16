@@ -113,6 +113,10 @@ func main() {
 	r.Get("/api/wallet/balance/{id}", walletSvc.BalanceHandler())
 	r.Get("/api/wallet/history/{id}", walletSvc.HistoryHandler())
 
+// ---- Metrics (registered with a real handler) ----
+	r.Method(http.MethodGet, "/metrics", telemetry.Handler())
+
+
 	// Frontend (embedded)
 	webContent, err := fs.Sub(webFS, "web")
 	if err != nil {
