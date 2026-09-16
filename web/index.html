@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RedisLua Showcase</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/style.css" />
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            redis: { DEFAULT: '#DC382D', dark: '#b52a21', light: '#ff5a4e' },
+          },
+          fontFamily: { mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace'] },
+        }
+      }
+    }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body class="dark bg-gray-950 text-gray-100 font-mono min-h-screen">
+
+<!-- ═══════════════ HEADER ═══════════════ -->
+<header class="border-b border-gray-800 bg-gray-900/80 backdrop-blur sticky top-0 z-50">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-full bg-redis flex items-center justify-center text-white font-bold text-sm shadow-lg shadow-redis/40">R</div>
+      <div>
+        <h1 class="text-lg font-bold tracking-tight">RedisLua <span class="text-redis">Showcase</span></h1>
+        <p class="text-xs text-gray-500">Atomic operations · Go + Redis · Lua scripting</p>
+      </div>
+    </div>
+    <a href="https://github.com" target="_blank"
+       class="text-xs text-gray-400 hover:text-white border border-gray-700 hover:border-gray-500 px-3 py-1.5 rounded-lg transition-all">
+      GitHub ↗
+    </a>
+  </div>
+</header>
+
+<!-- ═══════════════ TAB NAV ═══════════════ -->
+<nav class="border-b border-gray-800 bg-gray-900/50 sticky top-[57px] z-40">
+  <div class="max-w-7xl mx-auto px-4 flex gap-1 overflow-x-auto">
+    <button onclick="switchTab('ratelimit')" id="tab-btn-ratelimit"
+            class="tab-btn active-tab px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-all">
+      🚦 Rate Limiter
+    </button>
+    <button onclick="switchTab('lock')" id="tab-btn-lock"
+            class="tab-btn px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-all">
+      🔒 Distributed Lock
+    </button>
+    <button onclick="switchTab('leaderboard')" id="tab-btn-leaderboard"
+            class="tab-btn px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-all">
+      🏆 Leaderboard
+    </button>
+    <button onclick="switchTab('flashsale')" id="tab-btn-flashsale"
+            class="tab-btn px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-all">
+      ⚡ Flash Sale
+    </button>
+    <button onclick="switchTab('wallet')" id="tab-btn-wallet"
+            class="tab-btn px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-all">
+      💡 Wallet
+    </button>
+  </div>
+</nav>
+
+<!-- ═══════════════ API & POSTMAN BANNER ═══════════════ -->
+<div class="bg-gray-900 border-b border-gray-800/80 py-2 px-4">
+  <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 text-xs">
+    <div class="flex items-center gap-2">
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-redis/20 text-redis border border-redis/40">API Endpoint</span>
+      <span class="text-gray-400">Rate Limiter URL:</span>
+      <code id="api-url-display" class="font-mono bg-gray-950 px-2 py-1 rounded text-emerald-400 border border-gray-800 select-all">http://localhost:8080/api/ping</code>
+    </div>
+    <div class="flex items-center gap-2">
+      <button onclick="copyApiUrl()" id="copy-btn" class="text-gray-300 hover:text-white bg-gray-800 hover:bg-gray-700 px-2.5 py-1 rounded border border-gray-700 transition-all flex items-center gap-1.5">
+        <span id="copy-icon">📋</span> <span id="copy-text">Copy for Postman / cURL</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<main class="max-w-7xl mx-auto px-4 py-6">
+
+<!-- ═══════════════ RATE LIMITER ═══════════════ -->
+<section id="panel-ratelimit" class="tab-panel">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-4">
+      <div class="card">
+        <h2 class="section-title">🚦 Sliding-Window Rate Limiter</h2>
+        <p class="text-sm text-gray-400 mb-4">
+          10 requests / 60s per client IP. A single Lua script atomically checks & records each call —
+          no race between <code class="code">ZCARD</code> and <code class="code">ZADD</code>.
+        </p>
+        <!-- Progress -->
+        <div class="mb-5">
+          <div class="flex justify-between text-xs text-gray-400 mb-1.5">
+            <span>Requests used</span>
+            <span><span id="rl-used">0</span> / 10</span>
+          </div>
+          <div class="w-full bg-gray-800 rounded-full h-3 overflow-hidden">
+            <div id="rl-bar" class="h-3 rounded-full transition-all duration-500 bg-emerald-500" style="width:0%"></div>
+          </div>
+          <div class="flex justify-between text-xs text-gray-500 mt-1">
+            <span>Window resets in <span id="rl-reset">60</span>s</span>
+            <span id="rl-status-badge" class="px-2 py-0.5 rounded-full text-xs bg-gray-700 text-gray-300">–</span>
+          </div>
+        </div>
+        <!-- Buttons -->
+        <div class="flex flex-wrap gap-3">
+          <button onclick="RL.sendOne()" class="btn-primary flex-1">Send Request</button>
+          <button onclick="RL.spam()" class="btn-secondary flex-1">Spam 20×</button>
+          <button onclick="RL.reset()" class="btn-ghost text-xs">Reset</button>
+        </div>
+      </div>
+      <!-- 100K RPS High-Throughput Benchmark -->
+      <div class="card border-redis/40 bg-gradient-to-br from-gray-900 via-gray-900 to-redis/10">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="section-title text-redis">⚡ 100K RPS High-Throughput Benchmark</h3>
+          <span class="text-xs bg-redis/20 text-redis px-2 py-0.5 rounded-full border border-redis/40 font-semibold">O(1) Token Bucket Lua</span>
+        </div>
+        <p class="text-xs text-gray-400 mb-4">
+          Spins up an in-engine Go worker pool (150 concurrent goroutines) firing <strong>100,000 requests</strong> directly against the atomic Lua Token Bucket script in Redis.
+        </p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+          <div>
+            <label class="text-xs text-gray-500 block mb-1">Total Requests</label>
+            <select id="bm-total" class="input text-sm w-full">
+              <option value="100000" selected>100,000 requests</option>
+              <option value="50000">50,000 requests</option>
+              <option value="20000">20,000 requests</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-gray-500 block mb-1">Worker Goroutines</label>
+            <select id="bm-workers" class="input text-sm w-full">
+              <option value="150" selected>150 workers</option>
+              <option value="200">200 workers</option>
+              <option value="100">100 workers</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-gray-500 block mb-1">Bucket Rate Limit</label>
+            <select id="bm-rate" class="input text-sm w-full">
+              <option value="10000" selected>10,000 / sec (Stress & Limits)</option>
+              <option value="25000">25,000 / sec</option>
+              <option value="50000">50,000 / sec</option>
+              <option value="100000">100,000 / sec</option>
+            </select>
+          </div>
+        </div>
+        <button onclick="RL.runBenchmark()" id="bm-btn" class="btn-primary w-full py-2.5 flex items-center justify-center gap-2 font-bold">
+          <span>🚀 Run 100,000 RPS Stress Benchmark</span>
+        </button>
+
+        <!-- Benchmark Stats -->
+        <div id="bm-stats" class="hidden mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="stat-card border-redis/40">
+            <div class="text-xl md:text-2xl font-bold text-white font-mono" id="bm-rps">–</div>
+            <div class="text-xs text-redis mt-0.5 font-semibold">Achieved RPS</div>
+          </div>
+          <div class="stat-card">
+            <div class="text-xl md:text-2xl font-bold text-emerald-400 font-mono" id="bm-allowed">–</div>
+            <div class="text-xs text-gray-500 mt-0.5">Allowed (200)</div>
+          </div>
+          <div class="stat-card">
+            <div class="text-xl md:text-2xl font-bold text-red-400 font-mono" id="bm-denied">–</div>
+            <div class="text-xs text-gray-500 mt-0.5">Rate Limited (429)</div>
+          </div>
+          <div class="stat-card">
+            <div class="text-xl md:text-2xl font-bold text-gray-300 font-mono" id="bm-duration">–</div>
+            <div class="text-xs text-gray-500 mt-0.5">Duration</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Log -->
+      <div class="card">
+        <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">Request Log</h3>
+        <div id="rl-log" class="log-area"></div>
+      </div>
+    </div>
+    <!-- Lua panel -->
+    <div class="lua-panel">
+      <div class="lua-header">Lua Script <span class="text-gray-500 font-normal">— executed atomically</span></div>
+      <pre class="lua-code">-- KEYS[1] : sorted-set per client IP
+-- ARGV    : now_ms, window_ms, limit, uid
+
+local now    = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local limit  = tonumber(ARGV[3])
+
+<span class="lua-comment">-- Evict expired entries</span>
+redis.call('ZREMRANGEBYSCORE',
+  KEYS[1], '-inf', now - window)
+
+local count = redis.call('ZCARD', KEYS[1])
+
+if count < limit then
+  redis.call('ZADD', KEYS[1], now, ARGV[4])
+  redis.call('PEXPIRE', KEYS[1], window)
+  return {1, limit - count - 1, now + window}
+else
+  local oldest = redis.call(
+    'ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')
+  return {0, 0, tonumber(oldest[2]) + window}
+end</pre>
+      <div class="lua-why">
+        <span class="text-redis font-semibold">Why Lua?</span> A naive GET → compare → INCR has a race window between reads. Lua collapses the entire sliding-window check into one uninterruptible Redis command.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ DISTRIBUTED LOCK ═══════════════ -->
+<section id="panel-lock" class="tab-panel hidden">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-4">
+      <div class="card">
+        <h2 class="section-title">🔒 Distributed Lock</h2>
+        <p class="text-sm text-gray-400 mb-4">
+          Acquire uses <code class="code">SET NX PX</code> (atomic natively).
+          Release uses Lua to atomically check token ownership before deleting.
+        </p>
+        <div class="mb-4 flex gap-3 items-center flex-wrap">
+          <label class="text-xs text-gray-400">Resource:</label>
+          <select id="lock-resource" class="input text-sm flex-1 min-w-[140px]">
+            <option>payment-processor</option>
+            <option>inventory-service</option>
+            <option>email-sender</option>
+          </select>
+          <label class="text-xs text-gray-400">TTL:</label>
+          <select id="lock-ttl" class="input text-sm w-24">
+            <option value="5000">5s</option>
+            <option value="10000">10s</option>
+            <option value="30000">30s</option>
+          </select>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <!-- Worker A -->
+          <div id="worker-a-card" class="worker-card">
+            <div class="flex items-center justify-between mb-3">
+              <span class="font-semibold text-blue-400">Worker A</span>
+              <span id="wa-status" class="status-badge status-free">🔓 free</span>
+            </div>
+            <div class="text-xs text-gray-500 mb-3">Token: <span id="wa-token" class="text-gray-400 break-all">—</span></div>
+            <div class="flex gap-2">
+              <button onclick="Lock.acquire('A')" id="wa-acquire" class="btn-primary text-xs flex-1 py-2">Acquire</button>
+              <button onclick="Lock.release('A')" id="wa-release" class="btn-ghost text-xs flex-1 py-2" disabled>Release</button>
+            </div>
+          </div>
+          <!-- Worker B -->
+          <div id="worker-b-card" class="worker-card">
+            <div class="flex items-center justify-between mb-3">
+              <span class="font-semibold text-purple-400">Worker B</span>
+              <span id="wb-status" class="status-badge status-free">🔓 free</span>
+            </div>
+            <div class="text-xs text-gray-500 mb-3">Token: <span id="wb-token" class="text-gray-400 break-all">—</span></div>
+            <div class="flex gap-2">
+              <button onclick="Lock.acquire('B')" id="wb-acquire" class="btn-primary text-xs flex-1 py-2">Acquire</button>
+              <button onclick="Lock.release('B')" id="wb-release" class="btn-ghost text-xs flex-1 py-2" disabled>Release</button>
+            </div>
+          </div>
+        </div>
+        <button onclick="Lock.race()" class="btn-secondary w-full mt-4 text-sm">⚡ Race Both Workers Simultaneously</button>
+      </div>
+      <div class="card">
+        <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">Event Log</h3>
+        <div id="lock-log" class="log-area"></div>
+      </div>
+    </div>
+    <div class="lua-panel">
+      <div class="lua-header">Lua Script <span class="text-gray-500 font-normal">— unlock only</span></div>
+      <pre class="lua-code">-- KEYS[1] : lock key
+-- ARGV[1] : owner token
+
+<span class="lua-comment">-- The critical check: only the TRUE
+-- owner can release the lock.</span>
+if redis.call('GET', KEYS[1])
+     == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+else
+  return 0  <span class="lua-comment">-- token mismatch</span>
+end</pre>
+      <div class="lua-why">
+        <span class="text-redis font-semibold">Why Lua?</span> A plain <code class="code">DEL</code> would release <em>any</em> holder's lock. The Lua script atomically verifies the token before deleting — making crash-safe ownership checking possible.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ LEADERBOARD ═══════════════ -->
+<section id="panel-leaderboard" class="tab-panel hidden">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-4">
+      <div class="card">
+        <h2 class="section-title">🏆 Real-Time Leaderboard</h2>
+        <p class="text-sm text-gray-400 mb-4">
+          Score updates stream live via SSE. The Lua script atomically updates score and
+          snapshots rank + neighbors — no stale rank between two reads.
+        </p>
+        <div class="flex gap-3 flex-wrap mb-4">
+          <input id="lb-player" type="text" placeholder="Player name" class="input flex-1 min-w-[120px]" />
+          <input id="lb-score" type="number" placeholder="Score" class="input w-28" />
+          <button onclick="LB.updateScore()" class="btn-primary">Submit Score</button>
+        </div>
+        <div class="flex gap-3 flex-wrap">
+          <button onclick="LB.seed()" class="btn-secondary flex-1 text-sm">🎲 Seed 20 Players</button>
+          <button onclick="LB.reset()" class="btn-ghost text-sm">Reset Board</button>
+        </div>
+      </div>
+      <!-- SSE indicator -->
+      <div class="flex items-center gap-2 px-1">
+        <div id="sse-dot" class="w-2 h-2 rounded-full bg-gray-600"></div>
+        <span id="sse-label" class="text-xs text-gray-500">SSE disconnected</span>
+      </div>
+      <!-- Rank card -->
+      <div id="lb-rank-card" class="hidden card border-redis/40 bg-redis/5">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-xs text-gray-400">Your rank</div>
+            <div class="text-3xl font-bold text-redis">#<span id="lb-my-rank">–</span></div>
+            <div class="text-xs text-gray-400">of <span id="lb-total">–</span> players · Score: <span id="lb-my-score" class="text-white">–</span></div>
+          </div>
+          <div class="text-right text-xs text-gray-400 space-y-1">
+            <div>▲ <span id="lb-above" class="text-gray-300">–</span></div>
+            <div class="text-redis font-bold"><span id="lb-you-name">you</span></div>
+            <div>▼ <span id="lb-below" class="text-gray-300">–</span></div>
+          </div>
+        </div>
+      </div>
+      <!-- Table -->
+      <div class="card overflow-hidden p-0">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-gray-800 bg-gray-900">
+              <th class="px-4 py-3 text-left text-xs text-gray-500 font-medium w-12">#</th>
+              <th class="px-4 py-3 text-left text-xs text-gray-500 font-medium">Player</th>
+              <th class="px-4 py-3 text-right text-xs text-gray-500 font-medium">Score</th>
+            </tr>
+          </thead>
+          <tbody id="lb-table-body">
+            <tr><td colspan="3" class="px-4 py-8 text-center text-gray-600 text-xs">No data — seed players or submit a score</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="lua-panel">
+      <div class="lua-header">Lua Script <span class="text-gray-500 font-normal">— score + snapshot</span></div>
+      <pre class="lua-code">-- KEYS[1] : leaderboard sorted set
+-- ARGV    : player, score, topN, range
+
+redis.call('ZADD', KEYS[1],
+  tonumber(ARGV[2]), ARGV[1])
+
+<span class="lua-comment">-- Rank is now consistent with
+-- the ZADD above — same snapshot</span>
+local rank = redis.call(
+  'ZREVRANK', KEYS[1], ARGV[1])
+
+local topList = redis.call(
+  'ZREVRANGE', KEYS[1],
+  0, ARGV[3]-1, 'WITHSCORES')
+
+local nb = redis.call('ZREVRANGE',
+  KEYS[1],
+  math.max(0, rank-ARGV[4]),
+  rank + ARGV[4], 'WITHSCORES')
+
+local total = redis.call(
+  'ZCARD', KEYS[1])
+
+return {rank+1, score, total,
+        topList, nb}</pre>
+      <div class="lua-why">
+        <span class="text-redis font-semibold">Why Lua?</span> Between two separate <code class="code">ZREVRANK</code> calls another write could shift ranks. Lua freezes the view: score update + rank + neighbors are all read from the same consistent snapshot.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ FLASH SALE ═══════════════ -->
+<section id="panel-flashsale" class="tab-panel hidden">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-4">
+      <div class="card">
+        <h2 class="section-title">⚡ Flash Sale — Oversell Prevention</h2>
+        <p class="text-sm text-gray-400 mb-4">
+          Lua atomically checks stock then decrements. Fire 50 concurrent buyers
+          against stock=10 — <strong class="text-white">exactly 10 succeed</strong>, no overselling, no mutex in Go.
+        </p>
+        <!-- Init -->
+        <div class="flex gap-3 mb-5 flex-wrap">
+          <input id="fs-stock-input" type="number" value="10" min="1" class="input w-24" placeholder="Stock" />
+          <button onclick="FS.init()" class="btn-primary">Init Sale</button>
+          <button onclick="FS.fetchStock()" class="btn-ghost text-xs">Refresh Stock</button>
+        </div>
+        <!-- Stock counter -->
+        <div class="flex items-end gap-6 mb-4">
+          <div>
+            <div class="text-xs text-gray-500 mb-1">Units remaining</div>
+            <div id="fs-stock-num" class="text-6xl font-bold tabular-nums stock-num transition-all duration-300">—</div>
+          </div>
+          <div class="flex-1 pb-2">
+            <div class="w-full bg-gray-800 rounded-full h-4 overflow-hidden">
+              <div id="fs-bar" class="h-4 rounded-full transition-all duration-500 bg-emerald-500" style="width:0%"></div>
+            </div>
+          </div>
+        </div>
+        <!-- Buttons -->
+        <div class="flex gap-3 flex-wrap">
+          <button onclick="FS.buyOne()" class="btn-primary flex-1">🛒 Buy 1</button>
+          <div class="flex gap-2 flex-1">
+            <input id="fs-buyers" type="number" value="50" min="1" max="200" class="input w-20 text-sm" placeholder="n" />
+            <button onclick="FS.stress()" class="btn-secondary flex-1 text-sm">⚡ Simulate Concurrent Buyers</button>
+          </div>
+        </div>
+        <!-- Stats -->
+        <div id="fs-stats" class="hidden mt-4 grid grid-cols-3 gap-3">
+          <div class="stat-card text-emerald-400">
+            <div class="text-2xl font-bold" id="fs-succeeded">0</div>
+            <div class="text-xs text-gray-500 mt-0.5">Succeeded</div>
+          </div>
+          <div class="stat-card text-red-400">
+            <div class="text-2xl font-bold" id="fs-failed">0</div>
+            <div class="text-xs text-gray-500 mt-0.5">Rejected</div>
+          </div>
+          <div class="stat-card text-gray-400">
+            <div class="text-sm font-semibold" id="fs-duration">–</div>
+            <div class="text-xs text-gray-500 mt-0.5">Duration</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">Purchase Log</h3>
+        <div id="fs-log" class="log-area"></div>
+      </div>
+    </div>
+    <div class="lua-panel">
+      <div class="lua-header">Lua Script <span class="text-gray-500 font-normal">— atomic guard</span></div>
+      <pre class="lua-code">-- KEYS[1] : stock counter
+-- ARGV[1] : quantity
+
+local qty   = tonumber(ARGV[1])
+local stock = redis.call('GET', KEYS[1])
+
+if stock == false then
+  return {-2, 0} <span class="lua-comment">-- not init</span>
+end
+
+stock = tonumber(stock)
+
+<span class="lua-comment">-- The guard: check AND decrement
+-- happen atomically. 1000 concurrent
+-- goroutines cannot all pass this if.</span>
+if stock < qty then
+  return {-1, stock} <span class="lua-comment">-- no stock</span>
+end
+
+local rem = tonumber(
+  redis.call('DECRBY', KEYS[1], qty))
+
+return {rem, rem}</pre>
+      <div class="lua-why">
+        <span class="text-redis font-semibold">Why Lua?</span> <code class="code">GET → if → DECRBY</code> in Go has a race: 1000 goroutines all read stock=1 and all decrement. Lua collapses check+decrement into one uninterruptible step.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ WALLET ═══════════════ -->
+<section id="panel-wallet" class="tab-panel hidden">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-4">
+      <div class="card">
+        <h2 class="section-title">💡 Atomic Wallet Transfer</h2>
+        <p class="text-sm text-gray-400 mb-4">
+          <code class="code">DECRBY A → INCRBY B</code> are two Redis commands. A crash between them
+          leaves ghost balances. Lua guarantees both execute or neither does.
+        </p>
+        <!-- Wallets -->
+        <div class="grid grid-cols-2 gap-4 mb-5">
+          <div class="wallet-card border-blue-500/30">
+            <div class="text-xs text-blue-400 font-semibold mb-1">Wallet A</div>
+            <div class="text-3xl font-bold tabular-nums mb-3">₹<span id="wallet-a-bal">0</span></div>
+            <div class="flex gap-2">
+              <input id="wa-topup" type="number" value="500" class="input text-sm flex-1 w-0" placeholder="Amount" />
+              <button onclick="Wallet.topup('A')" class="btn-primary text-xs py-2 px-3">Top Up</button>
+            </div>
+          </div>
+          <div class="wallet-card border-purple-500/30">
+            <div class="text-xs text-purple-400 font-semibold mb-1">Wallet B</div>
+            <div class="text-3xl font-bold tabular-nums mb-3">₹<span id="wallet-b-bal">0</span></div>
+            <div class="flex gap-2">
+              <input id="wb-topup" type="number" value="500" class="input text-sm flex-1 w-0" placeholder="Amount" />
+              <button onclick="Wallet.topup('B')" class="btn-primary text-xs py-2 px-3">Top Up</button>
+            </div>
+          </div>
+        </div>
+        <!-- Transfer -->
+        <div class="border border-gray-800 rounded-xl p-4 space-y-3">
+          <div class="text-sm font-medium text-gray-300">Transfer</div>
+          <div class="flex gap-3 items-center flex-wrap">
+            <select id="w-from" class="input text-sm flex-1 min-w-[80px]">
+              <option value="A">Wallet A</option>
+              <option value="B">Wallet B</option>
+            </select>
+            <span class="text-gray-500">→</span>
+            <select id="w-to" class="input text-sm flex-1 min-w-[80px]">
+              <option value="B">Wallet B</option>
+              <option value="A">Wallet A</option>
+            </select>
+            <input id="w-amount" type="number" value="100" class="input text-sm w-28" placeholder="Amount" />
+            <button onclick="Wallet.transfer()" class="btn-primary text-sm">Transfer</button>
+          </div>
+          <button onclick="Wallet.overdraft()" class="btn-ghost text-xs w-full py-2">
+            💥 Try Overdraft (transfer ₹99999)
+          </button>
+        </div>
+      </div>
+      <!-- Transaction history -->
+      <div class="card">
+        <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">Transaction History</h3>
+        <div id="wallet-log" class="log-area"></div>
+      </div>
+    </div>
+    <div class="lua-panel">
+      <div class="lua-header">Lua Script <span class="text-gray-500 font-normal">— atomic transfer</span></div>
+      <pre class="lua-code">-- KEYS[1] sender  KEYS[2] receiver
+-- KEYS[3] txn log
+-- ARGV[1] amount  ARGV[2] txn_id
+
+local from_bal = tonumber(
+  redis.call('GET', KEYS[1]) or '0')
+
+<span class="lua-comment">-- Guard: reject if insufficient</span>
+if from_bal < tonumber(ARGV[1]) then
+  return {-1, from_bal, 0}
+end
+
+<span class="lua-comment">-- Atomic debit + credit</span>
+local new_from = tonumber(
+  redis.call('DECRBY', KEYS[1], ARGV[1]))
+local new_to = tonumber(
+  redis.call('INCRBY', KEYS[2], ARGV[1]))
+
+<span class="lua-comment">-- Append to transaction log</span>
+redis.call('LPUSH', KEYS[3],
+  ARGV[2]..'|'..ARGV[1]..'|'
+  ..new_from..'|'..new_to)
+redis.call('LTRIM', KEYS[3], 0, 49)
+
+return {1, new_from, new_to}</pre>
+      <div class="lua-why">
+        <span class="text-redis font-semibold">Why Lua?</span> A crash after <code class="code">DECRBY</code> but before <code class="code">INCRBY</code> destroys money. Lua's atomicity guarantees the transfer is all-or-nothing, plus the log write is included in the same atomic unit.
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
