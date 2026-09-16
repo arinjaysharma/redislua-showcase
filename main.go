@@ -113,9 +113,6 @@ func main() {
 	r.Get("/api/wallet/balance/{id}", walletSvc.BalanceHandler())
 	r.Get("/api/wallet/history/{id}", walletSvc.HistoryHandler())
 
-	r.Handle("/metrics", telemetry.Handler())
-
-
 	// Frontend (embedded)
 	webContent, err := fs.Sub(webFS, "web")
 	if err != nil {
